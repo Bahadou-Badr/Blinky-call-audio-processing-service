@@ -1,0 +1,15 @@
+# config.yaml - pipeline settings
+pipeline:
+  denoise_default: "afftdn"     # "afftdn" or "rnnoise" (arnndn)
+  target_lufs: -16.0            # LUFS target, negative value
+  sample_rate: 16000            # sample rate for output
+  channels: 1                   # 1 mono, 2 stereo
+  use_compressor: true
+  compressor:
+    threshold_db: -12           # acompressor threshold
+    ratio: 4.0
+    attack: 200                 # ms
+    release: 1000               # ms
+  use_limiter: true
+  limiter:
+    threshold_db: -1.5         # final limiter threshold
