@@ -1,7 +1,6 @@
 package main
 
 import (
-	//"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 
+	"github.com/Bahadou-Badr/Blinky-call-audio-processing-service/internal/storage"
 	"github.com/Bahadou-Badr/Blinky-call-audio-processing-service/internal/store"
 )
 
@@ -51,9 +51,24 @@ func main() {
 	}
 	defer nc.Close()
 
+	// init S3 client for presign (API will use presigned URLs)
+	s3Cfg := storage.S3Config{
+		Endpoint:    env("S3_ENDPOINT", "http://localhost:9000"),
+		AccessKey:   env("S3_ACCESS_KEY", "miniouser"),
+		SecretKey:   env("S3_SECRET_KEY", "miniopass"),
+		Bucket:      env("S3_BUCKET", "call-audio-bucket"),
+		UseSSL:      false,
+		PresignSecs: int(getIntEnv("S3_PRESIGN_SECS", 60*60*24*7)),
+	}
+	s3Client, err := storage.NewS3Client(s3Cfg)
+	if err != nil {
+		log.Fatalf("s3 init: %v", err)
+	}
+
 	server := &APIServer{
 		store: st,
 		nc:    nc,
+		s3:    s3Client,
 	}
 
 	http.HandleFunc("/health", server.health)
@@ -67,6 +82,7 @@ func main() {
 type APIServer struct {
 	store *store.Store
 	nc    *nats.Conn
+	s3    *storage.S3Client
 }
 
 func (s *APIServer) health(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +141,7 @@ func (s *APIServer) submitHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	b, _ := json.Marshal(msg)
 	if err := s.nc.Publish("audio.jobs", b); err != nil {
-		// log but continue: worker may poll DB later, still fail safe
+		// log but continue: worker may poll DB later
 		log.Printf("nats publish error: %v", err)
 	}
 
@@ -151,8 +167,31 @@ func (s *APIServer) statusHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found: "+err.Error(), http.StatusNotFound)
 		return
 	}
+
+	resp := map[string]interface{}{
+		"job": job,
+	}
+
+	// if we have s3 key, generate presigned url
+	if job.S3Key != nil && *job.S3Key != "" {
+		presigned, err := s.s3.PresignedGetURL(ctx, *job.S3Key)
+		if err == nil {
+			resp["presigned_url"] = presigned
+		} else {
+			// fallback to bucket/key for debugging
+			resp["s3_ref"] = fmt.Sprintf("%s/%s", deref(job.S3Bucket), deref(job.S3Key))
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(job)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func env(k, d string) string {
@@ -161,6 +200,16 @@ func env(k, d string) string {
 		return d
 	}
 	return v
+}
+
+func getIntEnv(k string, d int) int {
+	if v := os.Getenv(k); v != "" {
+		var i int
+		if _, err := fmt.Sscanf(v, "%d", &i); err == nil {
+			return i
+		}
+	}
+	return d
 }
 
 func sanitize(name string) string {

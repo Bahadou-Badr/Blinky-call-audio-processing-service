@@ -1,0 +1,8 @@
+ALTER TABLE audio_jobs
+  ADD COLUMN IF NOT EXISTS s3_bucket TEXT,
+  ADD COLUMN IF NOT EXISTS s3_key TEXT,
+  ADD COLUMN IF NOT EXISTS s3_version_id TEXT,
+  ADD COLUMN IF NOT EXISTS duration_sec DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS loudness_json JSONB;
+
+CREATE INDEX IF NOT EXISTS idx_audio_jobs_s3_key ON audio_jobs(s3_key);
