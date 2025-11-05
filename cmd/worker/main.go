@@ -130,12 +130,12 @@ func processSingleJob(ctx context.Context, workerID int, st *store.Store, s3Clie
 		Compressor: audio.CompressorConf{
 			ThresholdDB: -12,
 			Ratio:       4,
-			Attack:      200,
+			Attack:      100,
 			Release:     1000,
 		},
 		UseLimiter: true,
 		Limiter: audio.LimiterConf{
-			ThresholdDB: -1.5,
+			ThresholdDB: -1.9,
 		},
 	}
 
@@ -146,6 +146,7 @@ func processSingleJob(ctx context.Context, workerID int, st *store.Store, s3Clie
 	defer cancel()
 	opts.DenoiseMethod = jm.DenoiseMethod
 	start := time.Now()
+	log.Printf("Processing job %s with denoise method: %s", jm.ID, jm.DenoiseMethod)
 	stats, err := audio.ProcessFile(procCtx, jm.InputPath, jm.OutputPath, opts)
 	if err != nil {
 		log.Printf("[w%d] job %s failed: %v", workerID, jm.ID, err)

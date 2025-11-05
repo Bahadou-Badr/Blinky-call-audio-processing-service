@@ -76,25 +76,50 @@ func ProcessFile(ctx context.Context, inputPath, outputPath string, opts Process
 		return nil, fmt.Errorf("ffprobe not found in PATH: %w", err)
 	}
 
-	// 1) choose denoise filter
-	denoiseFilter := "afftdn" // default
-	if strings.ToLower(opts.DenoiseMethod) == "noisereduce" || strings.ToLower(opts.DenoiseMethod) == "arnndn" {
-		denoiseFilter = "noisereduce"
-	}
+	// 1) choose denoise filter (FFmpeg side only)
+	denoiseFilter := "" // empty means "no ffmpeg-side denoising filter"
+	dnMethod := strings.ToLower(strings.TrimSpace(opts.DenoiseMethod))
 
-	if opts.DenoiseMethod == "noisereduce" {
+	// If using the external python noisereduce helper, run it and use its output as the new input.
+	// IMPORTANT: do not add "noisereduce" to FFmpeg filters (it doesn't exist).
+	if dnMethod == "noisereduce" {
 		denoisedPath, err := runNoisereduce(ctx, inputPathAbs, 1.0, "")
 		if err != nil {
-			// handle: either fail job or fallback. Example: log and continue using original input
-			log.Printf("noisereduce failed: %v — falling back to original", err)
+			log.Printf("noisereduce failed: %v — continuing with original input", err)
 		} else {
 			inputPathAbs = denoisedPath
-			// add to cleanup list to delete temp file later
+			// caller should cleanup tmp files later (your code already handles temp cleanup pattern)
+		}
+	} else {
+		// For FFmpeg built-in filters: prefer arnndn (RNNoise) when requested and available.
+		if dnMethod == "arnndn" || dnMethod == "rnnoise" {
+			// Check that ffmpeg supports arnndn
+			if ffmpegHasFilter("arnndn") {
+				// RNNoise model path (make configurable)
+				rnModel := os.Getenv("RNNOISE_MODEL_PATH")
+				if rnModel == "" {
+					rnModel = filepath.Join("tools", "models", "rnnoise-model.rnnn")
+				}
+				// If model file exists, set arnndn filter with model param; otherwise fall back.
+				if _, err := os.Stat(rnModel); err == nil {
+					// note: arnndn syntax: arnndn=m=path/to/model.rnnn
+					denoiseFilter = fmt.Sprintf("arnndn=m=%s", rnModel)
+				} else {
+					log.Printf("arnndn requested but model not found at %s, falling back to afftdn", rnModel)
+					denoiseFilter = "afftdn"
+				}
+			} else {
+				log.Printf("arnndn filter not available in ffmpeg build, falling back to afftdn")
+				denoiseFilter = "afftdn"
+			}
+		} else {
+			// default: afftdn (broadband frequency-domain denoising)
+			denoiseFilter = "afftdn"
 		}
 	}
+
 	// 2) measure loudness (first pass)
 	loudnessMap, _ := MeasureLoudness(ctx, inputPathAbs, opts.TargetLUFS)
-	// continue even if measurement returns error; will apply single-pass fallback
 
 	// 3) Build filter chain for second pass
 	filterParts := []string{}
@@ -102,10 +127,10 @@ func ProcessFile(ctx context.Context, inputPath, outputPath string, opts Process
 		filterParts = append(filterParts, denoiseFilter)
 	}
 
-	// prepare loudnorm application (note.me use measured values if available in future enhancements)
+	// prepare loudnorm application (we use opts.TargetLUFS)
 	loudnormApply := fmt.Sprintf("loudnorm=I=%v:TP=-1.5:LRA=7", opts.TargetLUFS)
 	filterParts = append(filterParts, loudnormApply)
-
+	// ---------------------------------------------------------------------
 	// compressor (needs dB -> linear conversion for threshold)
 	if opts.UseCompressor {
 		ac := opts.Compressor
@@ -182,20 +207,20 @@ func ProcessFile(ctx context.Context, inputPath, outputPath string, opts Process
 }
 
 // ffmpegHasFilter checks if ffmpeg supports a given filter name by calling "ffmpeg -filters"
-// func ffmpegHasFilter(name string) bool {
-// 	ffmpegPath, err := exec.LookPath("ffmpeg")
-// 	if err != nil {
-// 		return false
-// 	}
-// 	cmd := exec.Command(ffmpegPath, "-filters")
-// 	var out bytes.Buffer
-// 	cmd.Stdout = &out
-// 	cmd.Stderr = &out
-// 	if err := cmd.Run(); err != nil {
-// 		return false
-// 	}
-// 	return strings.Contains(out.String(), name)
-// }
+func ffmpegHasFilter(name string) bool {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return false
+	}
+	cmd := exec.Command(ffmpegPath, "-filters")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+	return strings.Contains(out.String(), name)
+}
 
 // stripTrailingZeros formats a float removing unnecessary decimals for ffmpeg filters.
 // returns a string not a float to avoid fmt printing lengthy digits.
