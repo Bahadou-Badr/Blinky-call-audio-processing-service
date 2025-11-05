@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -76,16 +78,20 @@ func ProcessFile(ctx context.Context, inputPath, outputPath string, opts Process
 
 	// 1) choose denoise filter
 	denoiseFilter := "afftdn" // default
-	if strings.ToLower(opts.DenoiseMethod) == "rnnoise" || strings.ToLower(opts.DenoiseMethod) == "arnndn" {
-		// verify arnndn filter exists in ffmpeg build
-		if ffmpegHasFilter("arnndn") {
-			denoiseFilter = "arnndn"
-		} else {
-			// fallback
-			denoiseFilter = "afftdn"
-		}
+	if strings.ToLower(opts.DenoiseMethod) == "noisereduce" || strings.ToLower(opts.DenoiseMethod) == "arnndn" {
+		denoiseFilter = "noisereduce"
 	}
 
+	if opts.DenoiseMethod == "noisereduce" {
+		denoisedPath, err := runNoisereduce(ctx, inputPathAbs, 1.0, "")
+		if err != nil {
+			// handle: either fail job or fallback. Example: log and continue using original input
+			log.Printf("noisereduce failed: %v — falling back to original", err)
+		} else {
+			inputPathAbs = denoisedPath
+			// add to cleanup list to delete temp file later
+		}
+	}
 	// 2) measure loudness (first pass)
 	loudnessMap, _ := MeasureLoudness(ctx, inputPathAbs, opts.TargetLUFS)
 	// continue even if measurement returns error; will apply single-pass fallback
@@ -176,20 +182,20 @@ func ProcessFile(ctx context.Context, inputPath, outputPath string, opts Process
 }
 
 // ffmpegHasFilter checks if ffmpeg supports a given filter name by calling "ffmpeg -filters"
-func ffmpegHasFilter(name string) bool {
-	ffmpegPath, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		return false
-	}
-	cmd := exec.Command(ffmpegPath, "-filters")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		return false
-	}
-	return strings.Contains(out.String(), name)
-}
+// func ffmpegHasFilter(name string) bool {
+// 	ffmpegPath, err := exec.LookPath("ffmpeg")
+// 	if err != nil {
+// 		return false
+// 	}
+// 	cmd := exec.Command(ffmpegPath, "-filters")
+// 	var out bytes.Buffer
+// 	cmd.Stdout = &out
+// 	cmd.Stderr = &out
+// 	if err := cmd.Run(); err != nil {
+// 		return false
+// 	}
+// 	return strings.Contains(out.String(), name)
+// }
 
 // stripTrailingZeros formats a float removing unnecessary decimals for ffmpeg filters.
 // returns a string not a float to avoid fmt printing lengthy digits.
@@ -202,4 +208,45 @@ func stripTrailingZeros(f float64) string {
 		return "0"
 	}
 	return s
+}
+
+func runNoisereduce(ctx context.Context, inputPath string, propDecrease float64, noiseSamplePath string) (string, error) {
+	ffmpegPath, _ := exec.LookPath("ffmpeg") // used only if we need to resample (optional)
+	_ = ffmpegPath
+
+	tmpDir := os.TempDir()
+	base := filepath.Base(inputPath)
+	out := filepath.Join(tmpDir, fmt.Sprintf("nr_out_%d_%s.wav", time.Now().UnixNano(), base))
+
+	// Build command: python tools/noisereduce_denoise.py --in <in> --out <out> [--noise <noise>] --prop-decrease <n>
+	py, perr := exec.LookPath("python")
+	if perr != nil {
+		py, perr = exec.LookPath("python3")
+	}
+	if perr != nil {
+		return "", fmt.Errorf("python not found in PATH (required for noisereduce helper)")
+	}
+
+	args := []string{"tools/noisereduce_denoise.py", "--in", inputPath, "--out", out, "--prop-decrease", fmt.Sprintf("%g", propDecrease)}
+	if noiseSamplePath != "" {
+		args = append(args[:len(args)-0], append([]string{"--noise", noiseSamplePath}, args[len(args):]...)...)
+	}
+
+	// run with a reasonable timeout
+	runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, py, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	cmd.Stdout = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("noisereduce script failed: %w - stderr: %s", err, stderr.String())
+	}
+
+	// check file
+	if _, err := os.Stat(out); os.IsNotExist(err) {
+		return "", fmt.Errorf("noisereduce did not produce output %s", out)
+	}
+	return out, nil
 }

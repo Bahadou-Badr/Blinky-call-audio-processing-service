@@ -22,9 +22,10 @@ import (
 )
 
 type JobMsg struct {
-	ID         string `json:"id"`
-	InputPath  string `json:"input_path"`
-	OutputPath string `json:"output_path"`
+	ID            string `json:"id"`
+	InputPath     string `json:"input_path"`
+	OutputPath    string `json:"output_path"`
+	DenoiseMethod string `json:"denoise_method"`
 }
 
 func main() {
@@ -121,7 +122,7 @@ func processSingleJob(ctx context.Context, workerID int, st *store.Store, s3Clie
 
 	// processing options (could be paramized per-job later)
 	opts := audio.ProcessOptions{
-		DenoiseMethod: "afftdn",
+		DenoiseMethod: jm.DenoiseMethod,
 		TargetLUFS:    -16.0,
 		SampleRate:    16000,
 		Channels:      1,
@@ -143,7 +144,7 @@ func processSingleJob(ctx context.Context, workerID int, st *store.Store, s3Clie
 	// set an adequate timeout for processing
 	procCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-
+	opts.DenoiseMethod = jm.DenoiseMethod
 	start := time.Now()
 	stats, err := audio.ProcessFile(procCtx, jm.InputPath, jm.OutputPath, opts)
 	if err != nil {

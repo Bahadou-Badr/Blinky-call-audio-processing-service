@@ -108,6 +108,10 @@ func (s *APIServer) submitHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
+	denoiseMethod := r.FormValue("denoise_method")
+	if denoiseMethod == "" {
+		denoiseMethod = "arnndn" // default
+	}
 	// persist input file
 	ts := time.Now().UnixNano()
 	filename := fmt.Sprintf("%d_%s", ts, sanitize(fh.Filename))
@@ -135,15 +139,18 @@ func (s *APIServer) submitHandler(w http.ResponseWriter, r *http.Request) {
 
 	// publish to NATS subject
 	msg := map[string]string{
-		"id":          jobID.String(),
-		"input_path":  inputPath,
-		"output_path": outputPath,
+		"id":             jobID.String(),
+		"input_path":     inputPath,
+		"output_path":    outputPath,
+		"denoise_method": denoiseMethod,
 	}
 	b, _ := json.Marshal(msg)
 	if err := s.nc.Publish("audio.jobs", b); err != nil {
 		// log but continue: worker may poll DB later
 		log.Printf("nats publish error: %v", err)
 	}
+
+	log.Printf("enqueued job %s (method=%s)", jobID.String(), denoiseMethod)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"job_id": jobID.String()})
