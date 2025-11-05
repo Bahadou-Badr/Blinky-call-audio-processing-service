@@ -120,22 +120,22 @@ func processSingleJob(ctx context.Context, workerID int, st *store.Store, s3Clie
 	}
 	_ = st.UpdateProgress(ctx, jobUUID, 10)
 
-	// processing options (could be paramized per-job later)
+	// processing options, default single-preset
 	opts := audio.ProcessOptions{
 		DenoiseMethod: jm.DenoiseMethod,
 		TargetLUFS:    -16.0,
-		SampleRate:    16000,
+		SampleRate:    48000,
 		Channels:      1,
 		UseCompressor: true,
 		Compressor: audio.CompressorConf{
-			ThresholdDB: -12,
-			Ratio:       4,
-			Attack:      100,
-			Release:     1000,
+			ThresholdDB: -20,
+			Ratio:       3.1,
+			Attack:      5,
+			Release:     120,
 		},
 		UseLimiter: true,
 		Limiter: audio.LimiterConf{
-			ThresholdDB: -1.9,
+			ThresholdDB: -1.0,
 		},
 	}
 
@@ -171,7 +171,6 @@ func processSingleJob(ctx context.Context, workerID int, st *store.Store, s3Clie
 	versionID := info.VersionID
 	if err := st.UpdateJobStorage(uploadCtx, jobUUID, s3Client.Bucket, objectKey, versionID); err != nil {
 		log.Printf("[w%d] db update storage failed: %v", workerID, err)
-		// continue; we still want to set done if everything else ok
 	}
 
 	// update metadata

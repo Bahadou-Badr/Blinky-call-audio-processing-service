@@ -110,7 +110,7 @@ func (s *APIServer) submitHandler(w http.ResponseWriter, r *http.Request) {
 
 	denoiseMethod := r.FormValue("denoise_method")
 	if denoiseMethod == "" {
-		denoiseMethod = "arnndn" // default
+		denoiseMethod = "none" // default
 	}
 	// persist input file
 	ts := time.Now().UnixNano()
@@ -179,7 +179,7 @@ func (s *APIServer) statusHandler(w http.ResponseWriter, r *http.Request) {
 		"job": job,
 	}
 
-	// if we have s3 key, generate presigned url
+	// generating presigned url, if we have s3 key
 	if job.S3Key != nil && *job.S3Key != "" {
 		presigned, err := s.s3.PresignedGetURL(ctx, *job.S3Key)
 		if err == nil {

@@ -60,7 +60,7 @@ func MeasureLoudness(ctx context.Context, path string, targetLufs float64) (map[
 		return nil, fmt.Errorf("ffmpeg not found: %w", err)
 	}
 
-	// Use loudnorm with print_format=summary; single-pass measure only
+	// Using loudnorm with print_format=summary; single-pass measure only
 	// Example: ffmpeg -i input.wav -af loudnorm=I=-16:TP=-1.5:LRA=7:print_format=summary -f null -
 	args := []string{"-i", path, "-af", fmt.Sprintf("loudnorm=I=%v:TP=-1.5:LRA=7:print_format=summary", targetLufs), "-f", "null", "-"}
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
@@ -70,7 +70,7 @@ func MeasureLoudness(ctx context.Context, path string, targetLufs float64) (map[
 	// ffmpeg prints summary to stderr
 	if err := cmd.Run(); err != nil {
 		// ffmpeg returns non-zero when output is null; still parse stderr
-		// we'll attempt to parse stderr even on error
+		// i'll attempt to parse stderr even on error
 	}
 
 	out := stderr.String()

@@ -56,7 +56,7 @@ type Stats struct {
 }
 
 // ProcessFile performs:
-// 1) choose denoiser (arnndn if requested and available, else afftdn)
+// 1) choose denoiser (arnndn if requested and available, else afftdn) or noisereduce
 // 2) measure loudness via ffmpeg loudnorm (first pass)
 // 3) apply loudnorm using measured params (second pass) + compressor + limiter
 // 4) returns Stats with duration and loudness metrics
@@ -80,8 +80,7 @@ func ProcessFile(ctx context.Context, inputPath, outputPath string, opts Process
 	denoiseFilter := "" // empty means "no ffmpeg-side denoising filter"
 	dnMethod := strings.ToLower(strings.TrimSpace(opts.DenoiseMethod))
 
-	// If using the external python noisereduce helper, run it and use its output as the new input.
-	// IMPORTANT: do not add "noisereduce" to FFmpeg filters (it doesn't exist).
+	// using the external python noisereduce helper, use its output as the new input.
 	if dnMethod == "noisereduce" {
 		denoisedPath, err := runNoisereduce(ctx, inputPathAbs, 1.0, "")
 		if err != nil {
@@ -127,7 +126,7 @@ func ProcessFile(ctx context.Context, inputPath, outputPath string, opts Process
 		filterParts = append(filterParts, denoiseFilter)
 	}
 
-	// prepare loudnorm application (we use opts.TargetLUFS)
+	// preparing loudnorm application (using opts.TargetLUFS)
 	loudnormApply := fmt.Sprintf("loudnorm=I=%v:TP=-1.5:LRA=7", opts.TargetLUFS)
 	filterParts = append(filterParts, loudnormApply)
 	// ---------------------------------------------------------------------
