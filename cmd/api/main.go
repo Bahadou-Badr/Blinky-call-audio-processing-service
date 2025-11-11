@@ -12,7 +12,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/Bahadou-Badr/Blinky-call-audio-processing-service/internal/metrics"
 	"github.com/Bahadou-Badr/Blinky-call-audio-processing-service/internal/storage"
 	"github.com/Bahadou-Badr/Blinky-call-audio-processing-service/internal/store"
 )
@@ -74,6 +76,11 @@ func main() {
 	http.HandleFunc("/health", server.health)
 	http.HandleFunc("/submit", server.submitHandler)
 	http.HandleFunc("/status/", server.statusHandler) // expects /status/{uuid}
+	// register metrics
+	metrics.Register()
+
+	// expose /metrics
+	http.Handle("/metrics", promhttp.Handler())
 
 	log.Printf("API listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
@@ -110,7 +117,7 @@ func (s *APIServer) submitHandler(w http.ResponseWriter, r *http.Request) {
 
 	denoiseMethod := r.FormValue("denoise_method")
 	if denoiseMethod == "" {
-		denoiseMethod = "none" // default
+		denoiseMethod = "afftdn" // default
 	}
 	// persist input file
 	ts := time.Now().UnixNano()

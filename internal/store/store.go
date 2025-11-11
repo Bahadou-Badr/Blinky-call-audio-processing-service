@@ -13,20 +13,22 @@ import (
 
 // Job represents a processing job record with storage/metadata fields
 type Job struct {
-	ID         uuid.UUID      `json:"id"`
-	InputPath  string         `json:"input_path"`
-	OutputPath string         `json:"output_path"`
-	Status     string         `json:"status"`
-	Progress   int            `json:"progress"`
-	ErrorMsg   *string        `json:"error_msg,omitempty"`
-	S3Bucket   *string        `json:"s3_bucket,omitempty"`
-	S3Key      *string        `json:"s3_key,omitempty"`
-	S3Version  *string        `json:"s3_version_id,omitempty"`
-	Duration   *float64       `json:"duration_sec,omitempty"`
-	Loudness   sql.NullString `json:"loudness_json,omitempty"`
-	CreatedAt  time.Time      `json:"created_at"`
-	StartedAt  *time.Time     `json:"started_at,omitempty"`
-	FinishedAt *time.Time     `json:"finished_at,omitempty"`
+	ID            uuid.UUID       `json:"id"`
+	InputPath     string          `json:"input_path"`
+	OutputPath    string          `json:"output_path"`
+	Status        string          `json:"status"`
+	Progress      int             `json:"progress"`
+	ErrorMsg      *string         `json:"error_msg,omitempty"`
+	S3Bucket      *string         `json:"s3_bucket,omitempty"`
+	S3Key         *string         `json:"s3_key,omitempty"`
+	S3Version     *string         `json:"s3_version_id,omitempty"`
+	Duration      *float64        `json:"duration_sec,omitempty"`
+	Loudness      sql.NullString  `json:"loudness_json,omitempty"`
+	NoiseLevel    sql.NullFloat64 `json:"noise_level,omitempty"`
+	DenoiseMethod *string         `json:"denoise_method,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	StartedAt     *time.Time      `json:"started_at,omitempty"`
+	FinishedAt    *time.Time      `json:"finished_at,omitempty"`
 }
 
 type Store struct {
@@ -62,7 +64,7 @@ func (s *Store) CreateJob(ctx context.Context, inputPath, outputPath string) (uu
 func (s *Store) GetJob(ctx context.Context, id uuid.UUID) (*Job, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT id, input_path, output_path, status, progress, error_msg, created_at, started_at, finished_at,
-		       s3_bucket, s3_key, s3_version_id, duration_sec, loudness_json
+		       s3_bucket, s3_key, s3_version_id, duration_sec, loudness_json, noise_level, denoise_method
 		FROM audio_jobs WHERE id=$1
 	`, id)
 
@@ -71,11 +73,13 @@ func (s *Store) GetJob(ctx context.Context, id uuid.UUID) (*Job, error) {
 	var s3Bucket, s3Key, s3Version *string
 	var duration sql.NullFloat64
 	var loudnessJSON sql.NullString
+	var noiseLevel sql.NullFloat64
+	var denoiseMethod *string
 
 	err := row.Scan(
 		&j.ID, &j.InputPath, &j.OutputPath, &j.Status, &j.Progress, &errMsg,
 		&j.CreatedAt, &j.StartedAt, &j.FinishedAt,
-		&s3Bucket, &s3Key, &s3Version, &duration, &loudnessJSON,
+		&s3Bucket, &s3Key, &s3Version, &duration, &loudnessJSON, &noiseLevel, &denoiseMethod,
 	)
 	if err != nil {
 		return nil, err
@@ -89,6 +93,8 @@ func (s *Store) GetJob(ctx context.Context, id uuid.UUID) (*Job, error) {
 		j.Duration = &val
 	}
 	j.Loudness = loudnessJSON
+	j.NoiseLevel = noiseLevel
+	j.DenoiseMethod = denoiseMethod
 
 	return &j, nil
 }
@@ -122,9 +128,9 @@ func (s *Store) UpdateJobStorage(ctx context.Context, id uuid.UUID, bucket, key,
 }
 
 // UpdateJobMetadata sets duration and loudness json
-func (s *Store) UpdateJobMetadata(ctx context.Context, id uuid.UUID, duration float64, loudnessJSON string) error {
+func (s *Store) UpdateJobMetadata(ctx context.Context, id uuid.UUID, duration float64, loudnessJSON string, noiseLevel float64, denoiseMethod string) error {
 	_, err := s.pool.Exec(ctx, `
-		UPDATE audio_jobs SET duration_sec=$2, loudness_json=$3 WHERE id=$1
-	`, id, duration, loudnessJSON)
+		UPDATE audio_jobs SET duration_sec=$2, loudness_json=$3, noise_level=$4, denoise_method=$5 WHERE id=$1
+	`, id, duration, loudnessJSON, noiseLevel, denoiseMethod)
 	return err
 }

@@ -3,6 +3,12 @@ ALTER TABLE audio_jobs
   ADD COLUMN IF NOT EXISTS s3_key TEXT,
   ADD COLUMN IF NOT EXISTS s3_version_id TEXT,
   ADD COLUMN IF NOT EXISTS duration_sec DOUBLE PRECISION,
-  ADD COLUMN IF NOT EXISTS loudness_json JSONB;
+  ADD COLUMN IF NOT EXISTS loudness_json JSONB,
+  ADD COLUMN IF NOT EXISTS denoise_method TEXT,
+  ADD COLUMN IF NOT EXISTS noise_level DOUBLE PRECISION DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE DEFAULT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_audio_jobs_s3_key ON audio_jobs(s3_key);
+CREATE INDEX IF NOT EXISTS idx_audio_jobs_expires_at ON audio_jobs(expires_at);
+CREATE INDEX IF NOT EXISTS idx_audio_jobs_duration_sec ON audio_jobs(duration_sec);

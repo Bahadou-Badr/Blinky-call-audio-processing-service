@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'blinky'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:8080'] # if running API on host:8080; use appropriate host mapping

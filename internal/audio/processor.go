@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,7 @@ type ProcessOptions struct {
 type Stats struct {
 	DurationSec float64            `json:"duration_sec"`
 	Loudness    map[string]float64 `json:"loudness"` // measured loudness map (keys from MeasureLoudness)
+	NoiseLevel  float64            `json:"noise_level"`
 }
 
 // ProcessFile performs:
@@ -76,6 +78,12 @@ func ProcessFile(ctx context.Context, inputPath, outputPath string, opts Process
 		return nil, fmt.Errorf("ffprobe not found in PATH: %w", err)
 	}
 
+	// Mesure the noise level
+	noiseLevel, err := GetNoiseLevel(ctx, inputPathAbs)
+	if err != nil {
+		return nil, fmt.Errorf("GetNoiseLevel  not work with the PATH: %w", err)
+	}
+
 	// 1) choose denoise filter (FFmpeg side only)
 	denoiseFilter := "" // empty means "no ffmpeg-side denoising filter"
 	dnMethod := strings.ToLower(strings.TrimSpace(opts.DenoiseMethod))
@@ -87,7 +95,7 @@ func ProcessFile(ctx context.Context, inputPath, outputPath string, opts Process
 			log.Printf("noisereduce failed: %v — continuing with original input", err)
 		} else {
 			inputPathAbs = denoisedPath
-			// caller should cleanup tmp files later (your code already handles temp cleanup pattern)
+			// caller should cleanup tmp files later (THE code already handles temp cleanup pattern)
 		}
 	} else {
 		// For FFmpeg built-in filters: prefer arnndn (RNNoise) when requested and available.
@@ -202,6 +210,8 @@ func ProcessFile(ctx context.Context, inputPath, outputPath string, opts Process
 		stats.Loudness = loudnessMap
 	}
 
+	stats.NoiseLevel = noiseLevel
+
 	return stats, nil
 }
 
@@ -273,4 +283,23 @@ func runNoisereduce(ctx context.Context, inputPath string, propDecrease float64,
 		return "", fmt.Errorf("noisereduce did not produce output %s", out)
 	}
 	return out, nil
+}
+
+func GetNoiseLevel(ctx context.Context, path string) (float64, error) {
+	ffmpegPath, _ := exec.LookPath("ffmpeg")
+	cmd := exec.CommandContext(ctx, ffmpegPath, "-i", path, "-af", "volumedetect", "-f", "null", "-")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		// ffmpeg returns non-zero for null output; we will parse stderr anyway
+	}
+	out := stderr.String()
+	// parse mean_volume: -xx.xx dB
+	re := regexp.MustCompile(`mean_volume:\s*([-+]?[0-9]*\.?[0-9]+)\s*dB`)
+	m := re.FindStringSubmatch(out)
+	if len(m) < 2 {
+		return 0, fmt.Errorf("mean_volume not found")
+	}
+	v, _ := strconv.ParseFloat(m[1], 64)
+	return v, nil
 }

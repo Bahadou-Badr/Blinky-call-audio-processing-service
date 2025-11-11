@@ -17,6 +17,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/Bahadou-Badr/Blinky-call-audio-processing-service/internal/audio"
+	"github.com/Bahadou-Badr/Blinky-call-audio-processing-service/internal/metrics"
 	"github.com/Bahadou-Badr/Blinky-call-audio-processing-service/internal/storage"
 	"github.com/Bahadou-Badr/Blinky-call-audio-processing-service/internal/store"
 )
@@ -73,7 +74,7 @@ func main() {
 			log.Printf("invalid job msg: %v", err)
 			return
 		}
-		log.Printf("enqueued job %s", jm.ID)
+		log.Printf("enqueued job %s (denoiser=%s)", jm.ID, jm.DenoiseMethod)
 		jobCh <- jm
 	})
 	if err != nil {
@@ -114,13 +115,11 @@ func processSingleJob(ctx context.Context, workerID int, st *store.Store, s3Clie
 		return
 	}
 
-	// set started
 	if err := st.SetStarted(ctx, jobUUID); err != nil {
 		log.Printf("[w%d] db set started error: %v", workerID, err)
 	}
 	_ = st.UpdateProgress(ctx, jobUUID, 10)
 
-	// processing options, default single-preset
 	opts := audio.ProcessOptions{
 		DenoiseMethod: jm.DenoiseMethod,
 		TargetLUFS:    -16.0,
@@ -141,21 +140,48 @@ func processSingleJob(ctx context.Context, workerID int, st *store.Store, s3Clie
 
 	_ = st.UpdateProgress(ctx, jobUUID, 20)
 
-	// set an adequate timeout for processing
 	procCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	opts.DenoiseMethod = jm.DenoiseMethod
+
+	snrCtx, cancelSnr := context.WithTimeout(ctx, 90*time.Second)
+	defer cancelSnr()
+
+	// Estimate SNR before
+	snrBeforeMetrics, err := audio.EstimateQuality(snrCtx, jm.InputPath)
+	if err != nil {
+		log.Printf("[w%d] warning: SNR before estimation failed for job %s: %v", workerID, jm.ID, err)
+	}
+	snrBefore := 0.0
+	if snrBeforeMetrics != nil {
+		snrBefore = snrBeforeMetrics.SNR
+	}
+
+	loudBeforeMap, _ := audio.MeasureLoudness(procCtx, jm.InputPath, opts.TargetLUFS)
+
 	start := time.Now()
 	log.Printf("Processing job %s with denoise method: %s", jm.ID, jm.DenoiseMethod)
+
 	stats, err := audio.ProcessFile(procCtx, jm.InputPath, jm.OutputPath, opts)
 	if err != nil {
 		log.Printf("[w%d] job %s failed: %v", workerID, jm.ID, err)
 		_ = st.SetFailed(procCtx, jobUUID, err.Error())
 		return
 	}
+
+	// Estimate SNR after
+	snrAfterMetrics, err := audio.EstimateQuality(snrCtx, jm.OutputPath)
+	if err != nil {
+		log.Printf("[w%d] warning: SNR after estimation failed for job %s: %v", workerID, jm.ID, err)
+	}
+	snrAfter := 0.0
+	if snrAfterMetrics != nil {
+		snrAfter = snrAfterMetrics.SNR
+	}
+
+	loudAfterMap, _ := audio.MeasureLoudness(procCtx, jm.OutputPath, opts.TargetLUFS)
+
 	_ = st.UpdateProgress(procCtx, jobUUID, 70)
 
-	// upload to S3
 	objectKey := fmt.Sprintf("processed/%s", filepath.Base(jm.OutputPath))
 	uploadCtx, cancelUpload := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancelUpload()
@@ -167,37 +193,39 @@ func processSingleJob(ctx context.Context, workerID int, st *store.Store, s3Clie
 		return
 	}
 
-	// update DB with storage info
 	versionID := info.VersionID
 	if err := st.UpdateJobStorage(uploadCtx, jobUUID, s3Client.Bucket, objectKey, versionID); err != nil {
 		log.Printf("[w%d] db update storage failed: %v", workerID, err)
 	}
 
-	// update metadata
 	loudnessBytes, _ := json.Marshal(stats.Loudness)
 	if stats.DurationSec > 0 {
-		if err := st.UpdateJobMetadata(uploadCtx, jobUUID, stats.DurationSec, string(loudnessBytes)); err != nil {
-			log.Printf("[w%d] db update metadata failed: %v", workerID, err)
-		}
+		_ = st.UpdateJobMetadata(uploadCtx, jobUUID, stats.DurationSec, string(loudnessBytes), stats.NoiseLevel, jm.DenoiseMethod)
 	} else {
-		// still store loudness if duration missing
-		if err := st.UpdateJobMetadata(uploadCtx, jobUUID, 0.0, string(loudnessBytes)); err != nil {
-			log.Printf("[w%d] db update metadata failed: %v", workerID, err)
-		}
+		_ = st.UpdateJobMetadata(uploadCtx, jobUUID, 0.0, string(loudnessBytes), stats.NoiseLevel, jm.DenoiseMethod)
 	}
 
-	// optional presign (we'll log it)
 	presignedURL, err := s3Client.PresignedGetURL(uploadCtx, objectKey)
 	if err != nil {
 		log.Printf("[w%d] presign failed: %v", workerID, err)
 	}
 
 	_ = st.UpdateProgress(uploadCtx, jobUUID, 100)
-	if err := st.SetFinished(uploadCtx, jobUUID); err != nil {
-		log.Printf("[w%d] failed to mark finished: %v", workerID, err)
+	_ = st.SetFinished(uploadCtx, jobUUID)
+
+	var loudBefore, loudAfter float64
+	if v, ok := loudBeforeMap["input_i"]; ok {
+		loudBefore = v
+	}
+	if v, ok := loudAfterMap["input_i"]; ok {
+		loudAfter = v
 	}
 
-	log.Printf("[w%d] job %s done in %s; s3=%s/%s ver=%s presign=%s", workerID, jm.ID, time.Since(start), s3Client.Bucket, objectKey, versionID, presignedURL)
+	duration := time.Since(start)
+	metrics.ObserveJob(jm.DenoiseMethod, duration, err == nil, loudBefore, loudAfter, snrBefore, snrAfter)
+
+	log.Printf("[w%d] job %s done in %s; s3=%s/%s ver=%s presign=%s snr_before=%.2f snr_after=%.2f",
+		workerID, jm.ID, duration, s3Client.Bucket, objectKey, versionID, presignedURL, snrBefore, snrAfter)
 }
 
 // helpers for env
