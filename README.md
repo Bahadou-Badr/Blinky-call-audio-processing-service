@@ -81,7 +81,7 @@ curl http://localhost:8080/status/your-job-uuid
              │    - AI-based Noisereduce        │
              │ 3. Apply Loudness Normalization  │
              │    (FFmpeg loudnorm)             │
-             │ 4. Compressor/Limiter │
+             │ 4. Compressor/Limiter            │
              │ 5. Generate metadata (LUFS, etc) │
              └──────────┬───────────────────────┘
                         │ 4. Upload
