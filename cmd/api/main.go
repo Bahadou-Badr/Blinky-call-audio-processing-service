@@ -26,12 +26,12 @@ const (
 )
 
 func main() {
-	// config from env (simple)
+	// config from env
 	natsURL := env("NATS_URL", nats.DefaultURL)
 	pgConn := env("DATABASE_URL", "postgres://backdev:pa55word@localhost:5432/callaudio?sslmode=disable")
 	addr := env("HTTP_ADDR", ":8080")
 
-	// create storage dirs (input + output)
+	// create storage dirs
 	if err := os.MkdirAll(storageInputDir, 0o755); err != nil {
 		log.Fatalf("mkdir input: %v", err)
 	}
@@ -53,7 +53,7 @@ func main() {
 	}
 	defer nc.Close()
 
-	// init S3 client for presign (API will use presigned URLs)
+	// init S3 client for presign
 	s3Cfg := storage.S3Config{
 		Endpoint:    env("S3_ENDPOINT", "http://localhost:9000"),
 		AccessKey:   env("S3_ACCESS_KEY", "miniouser"),
@@ -136,7 +136,7 @@ func (s *APIServer) submitHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	out.Close()
 
-	// create job in DB (output path default)
+	// create job in DB
 	outputPath := filepath.Join(storageOutputDir, outFilename)
 	jobID, err := s.store.CreateJob(ctx, inputPath, outputPath)
 	if err != nil {
@@ -153,7 +153,7 @@ func (s *APIServer) submitHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	b, _ := json.Marshal(msg)
 	if err := s.nc.Publish("audio.jobs", b); err != nil {
-		// log but continue: worker may poll DB later
+		// log but continue worker may poll DB later
 		log.Printf("nats publish error: %v", err)
 	}
 
@@ -168,7 +168,7 @@ func (s *APIServer) statusHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// path: /status/{id}
+	// path /status/{id}
 	idStr := filepath.Base(r.URL.Path)
 	id, err := uuid.Parse(idStr)
 	if err != nil {
