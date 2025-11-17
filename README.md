@@ -7,7 +7,7 @@ A Go-based backend that denoises and normalizes call recordings for consistent l
 - **Optional Compression/Limiting**: After normalization, an FFmpeg limiter/compressor is applied to catch peaks (configurable thresholds).
 - **Configurable Pipeline**: Filter chain and parameters (noise reduction method, target LUFS, etc.) are driven by a YAML config or JSON options.
 - **Distributed Processing**: Audio jobs are enqueued to NATS and handled by concurrent worker services. Each job’s metadata (status, timestamps, etc.) is stored in PostgreSQL.
-- **Storage & Metadata**: Processed files are saved to S3-compatible object storage (e.g. MinIO). Public/private URLs and metadata (duration, loudness, SNR) are recorded in the database.
+- **Storage & Metadata**: Processed files are saved to MinIO(S3-compatible object storage ). Public/private URLs and metadata (duration, loudness, SNR) are recorded in the database.
 - **Observability**: Exposes Prometheus metrics (job latencies, error counts) for Grafana dashboards. Audio quality (e.g. estimated SNR before/after) is computed and logged for each job.
 
 ### Tech Stack
@@ -36,21 +36,21 @@ go build ./cmd/api && go build ./cmd/worker
 ### Usage Examples
 - **Submit a Job**: POST an audio file to ``/submit`` (multipart form “file”). For example:
 ```bash
-curl -X POST -F "file=@/path/to/call.wav" http://localhost:8080/submit
+curl -X POST -F "file=@/path/to/call.wav" http://localhost:8080/submit -F "denoise_method=noisereduce"
 ```
+![u](/screenshots/output_return.png)
 Returns JSON with a job ID.
 - **Check Status**: Poll ``/status/{id}`` to get job progress and metadata. E.g.:
 ```bash
 curl http://localhost:8080/status/your-job-uuid
 ```
-
+![u](/screenshots/job_status.png)
 - **Process File (Sync mode)**: (Phase 1 prototype) The ``/process`` endpoint accepted an upload and returned the processed file immediately. In later phases ``/process`` was superseded by the async ``/submit``/``/status`` model.
 
 - **Retrieve Result**: When a job completes, the response includes a URL (MinIO link) to download the denoised/normalized audio.
+![u](/screenshots/minio.png)
 
 ### Pipeline Overview
-- **Enqueue**: API server receives file, assigns a UUID, and enqueues a job on NATS.
-- **Worker Processing**: A worker pulls the job, saves the file locally, and runs FFmpeg:
 ```
                  ┌──────────────────────┐
                  │      Client App      │
